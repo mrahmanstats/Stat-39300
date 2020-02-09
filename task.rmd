@@ -1,0 +1,368 @@
+---
+title: "Joint Modeling for Primary Biliary Cholangitis "
+author: "Mohammed Rahman"
+date: "November 28, 2019"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+# Background
+
+Primary biliary cholangitis, previously called primary biliary cirrhosis (PBC) is an autoimmune, slowly progressive, cholestatic, liver disease characterized by a triad of chronic cholestasis, circulating anti-mitochondrial antibodies, and characteristic liver biopsy findings of nonsuppurative destructive cholangitis and interlobular bile duct destruction (Purohit, 2015). Primary biliary cholangitis is common among women of middle age worldwide. The disease ratio among female to male is 9:1. The diagnosis is usually made in women of age between 30 and 60 (Pandit 2019). Between January 1974 and May 1984, the Mayo Clinic conducted a double blinded randomized trial in primary biliary cholangitis of the liver (PBC), comparing the drug D-penicillamine with a placebo. There were 424 patients who met the eligibility criteria seen at the Clinic while the trial was open for patient registration. Both the treating physician and the patient agreed to participate in the randomized trial in 312 of the 424 cases. The date of randomization and many clinical, biochemical, serologic, and histologic parameters were recorded for each of the 312 clinical trial patients (Fleming & Harrington).
+
+# Purpose of Joint Modeling
+
+According to Dr. Rizopoulos, the joint model is a valuable model because it allows for endogenous time-varying covariates to be considered in predicting the survival outcome. Endogenous time-varying covariates are defined as a variable in which the future path of the covariate up to any time t > s is affected by the occurrence of an event at time point s. The Cox regression model only takes into consideration the base-line covariate values and does not account for the longitudinal change in the covariate. 
+![alt text here](hlprocess.png){#id .class width=80% height=40%}
+
+The upper grid shows the hazard function process and assess how the instantaneous risk of an event changes over time. The bottom grid shows the longitudinal process, where the asterisk illustrates the observed longitudinal responses and the green line the underlying longitudinal process. Joint models assume that the hazard function at any time point t, denoted by the vertical dashed line, is associated with the value of the longitudinal process (green line) at the same time point. Estimation of the model is based on the joint distribution of the two outcomes and can be done either under maximum likelihood or under a Bayesian approach. The framework of joint models can be used to account for both endogenous time-varying covariates and non-random dropout. (Drizopolous)
+
+```{r remove hash, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+options(gtsummary.print_engine = "kable") 
+knitr::opts_chunk$set(comment = NA, tidy=TRUE, tidy.opts=list(width.cutoff=60))
+
+
+```
+
+```{r Libraries, include=FALSE}
+library(data.table)
+library(tidyverse)
+library(survival)
+library(JM)
+library(nlme)
+library(skimr)
+library(survminer)
+library(ggthemr)
+library(gt)
+library(gtsummary)
+library(dplyr)
+library(mice)
+library(stargazer)
+library(ggpubr)
+library(finalfit)
+library(sjPlot)
+library(pander)
+data(pbc2)
+data(pbc2.id)
+```
+# Statistical Analysis
+
+
+**Table 1. Demographic and Biomarker Summary by Treatment**
+```{r Exploratory, echo=FALSE, message=FALSE, warning=FALSE, paged.print=TRUE}
+# table(pbc2.id$status2)
+# prop.table(table(pbc2.id$status2))
+# 
+# table(pbc2.id$sex)
+# prop.table(table(pbc2.id$sex))
+
+#Creating a age_cat variable, for summary description purposes
+pbc2.id <- pbc2.id %>% mutate(age_cat = case_when(age >= 20 & age < 40 ~ "20-39", 
+                                 age >= 40 & age < 60 ~ "40-59",
+                                 age >= 60 ~ "60+"))
+
+# table(pbc2.id$age_cat)
+# prop.table(table(pbc2.id$age_cat))
+# pbc2.id$followup <- if_else(pbc2.id$status2 == 0, "Censored", "Dead")
+# pbc2.id$followup <- factor(pbc2.id$followup)
+
+# gghistogram(pbc2.id, x = "years",
+#             add = "mean",
+#             rug = TRUE,
+#             fill = "followup",
+#             color = "followup",
+#             bins = 15 , palette = "jco") +
+#             labs(caption = "Source: the Lahman baseball database") +
+#             theme(plot.caption = element_text(hjust = 0, face= "italic"))
+# 
+# years_hist <- gghistogram(pbc2.id,
+#                           x = "years",
+#                           add = "mean",
+#                           rug = TRUE,
+#                           fill = "drug",
+#                           color = "drug",
+#                           palette = "jco",
+#                           bins = 15)
+# facet(years_hist, "drug",
+#       panel.labs.background = list(fill = "white", color = "black"))
+
+
+# ggplot(data = pbc2.id, aes(x = years, fill = drug)) + geom_histogram() + facet_grid(drug~.) + 
+#   ggtitle("Figure 1. Distribution of time-to-event by drug") + labs(x = "Time (Years)", y = "Count")
+# pbc2.id$followup <- if_else(pbc2.id$status2 == 0, "Censored", "Dead")
+# pbc2.id$followup <- factor(pbc2.id$followup)
+# ggplot(data = pbc2.id, aes(x = years, fill = followup)) + geom_histogram() + 
+#   ggtitle("Figure 2. Distribution of follow-up time") + labs(x = "Time (Years)", y = "Count")
+
+trial2 <- pbc2.id %>% dplyr::select(.,-id, -age, -year, -status2, -years) %>%
+  mutate(ascites = tolower(as.character(ascites)),
+         hepatomegaly = tolower(as.character(hepatomegaly)),
+         spiders = tolower(as.character(spiders)),
+         edema = tolower(edema))
+
+tbl_summary(trial2, by = drug,
+            label = list(vars(sex) ~ "Sex",
+            vars(age_cat) ~ "Categorized Age",
+            vars(ascites) ~ "Ascites",
+            vars(hepatomegaly) ~ "Hepatomegaly",
+            vars(spiders) ~ "Spiders",
+            vars(status) ~ "Status",
+            vars(edema) ~ "Edema",
+            vars(serBilir) ~ "Serum Bilirubin (mg/dl)",
+            vars(serChol) ~ "Serum Cholesterol (mg/dl)",
+            vars(albumin) ~ "Albumin (gm/dl)",
+            vars(alkaline) ~ "Alkaline Phosphatase (U/liter)",
+            vars(SGOT) ~ "SGOT (U/ml)",
+            vars(platelets) ~ "Platelets (ml/1000)",
+            vars(prothrombin) ~ "Prothrombin Time (s)",
+            vars(histologic) ~ "Histologic Stage of Disease"),
+            missing = "no") %>%
+  add_p() %>%
+  # add statistic labels
+  add_stat_label() %>%
+  # bold variable labels, italicize levels
+  bold_labels() %>%
+  italicize_levels() %>%
+  # bold p-values under a given threshold (default is 0.05)
+  bold_p(t = 0.1) %>%
+  # include percent in headers
+  modify_header(stat_by = "**{level}**, N = {n} ({style_percent(p, symbol = TRUE)})")
+```
+
+The descriptive statistics for the data shown in **table 1** further supports prior findings of PBC being more prevalent in females than in men, with around 90% of the patients in this study being female. Many of the patients in this study were in the later histologic periods of PBC, with around 39% of all patients being in the 3rd histologic stage and 35% of all patients being in the 4th histologic stage of disease. Table 1 also highlights that the largest observed age category for this study was between 40 – 59 years old, having 64% of the study population.
+
+#Kaplan-Meier
+
+The Kaplan–Meier estimator, also known as the product limit estimator, is a non-parametric statistic used to estimate the survival function from time-to-event data
+\
+\
+**Figure 1. Kaplan-Meier Plot of PBC patients stratified by drug**
+
+```{r Kaplan Meier Fit for Treatment, echo=FALSE, message=FALSE, warning=FALSE}
+fit1 <- survfit(Surv(years, status2) ~ 1, data=pbc2.id)
+a <- summary(fit1, times = 1:5)
+#a
+# ggsurvplot(
+#     fit = survfit(Surv(years, status2) ~ 1, data = pbc2.id), 
+#     xlab = "Years", , pval = T,
+#     ylab = "Overall survival probability", risk.table  = T,
+#     surv.median.line = "hv", palette = "jco")
+
+ggsurvplot(
+    fit = survfit(Surv(years, status2) ~ drug, data = pbc2.id), 
+    xlab = "Years", tables.height = 0.30,
+    ylab = "Overall survival probability", risk.table  = T,
+    surv.median.line = "hv", pval = T, palette = "jco")
+a <- survdiff(Surv(years, status2) ~ drug, data = pbc2.id)
+#ezfun::sdp(a)
+```
+The log-rank p-value suggests that there was no significant difference in survival time according to treatment.
+\
+\
+
+**Table 2. Multivariate Cox Proportional-Hazards Analysis of PBC Survival**
+```{r eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# coxfit <- coxph(Surv(years, status2) ~ drug + sex, data = pbc2.id)
+# coxfit %>% tbl_regression(exp = TRUE) 
+explanatory <- c("drug", "sex")
+dependent <- "Surv(years, status2)"
+pbc2.id %>% finalfit( dependent, explanatory) -> t6
+knitr::kable(t6, row.names=FALSE, align=c("l", "l", "r", "r", "r", "r"))
+
+```
+```{r Taking Care of NAs, warning=FALSE, include=FALSE}
+# Removing ID's that are in PBC2.ID but not in PBC2
+pbc2.id <- pbc2.id %>% mutate(histologic= as.factor(histologic))
+a <- na.omit(pbc2) %>% dplyr::select(id) %>% distinct()
+b <- pbc2.id %>% dplyr::select(id) %>% distinct()
+c <- anti_join(b,a)
+pbcsurv <- pbc2.id %>% filter(!(id %in% c$id)) 
+
+#Filling in 20 Missing values in PBC, Serum Cholesterol with a regression imputation method
+lm.ser <- lm(log(serChol)~ edema + log(serBilir) + log(alkaline) + SGOT + log(platelets) + log(prothrombin), data = pbc2.id)
+
+test <- pbcsurv %>% filter(is.na(serChol))
+pred.ser <- predict(lm.ser, test)
+#hist(exp(pred.ser))
+
+pbcsurv$serChol[is.na(pbcsurv$serChol)] <- exp(pred.ser)
+
+#imp_event <- mice(pbc2.id)
+```
+```{r Survival model fitting, echo=FALSE, message=FALSE, warning=FALSE}
+#Fitting Everything
+#surv.fit <- coxph(data = pbc2.id, Surv(years, status2) ~ drug + age +
+#                  sex + ascites + hepatomegaly + spiders +
+#                  edema + serChol + albumin + alkaline + SGOT  +
+#                  platelets + prothrombin + histologic)
+
+surv.fit.log <- coxph(data = pbcsurv, Surv(years, status2) ~ drug + age + sex  + edema + log(serChol) + log(albumin)  + log(SGOT) + log(prothrombin) + histologic)
+
+explanatory <- c("drug", "sex", "age", "log(albumin)" , "log(SGOT)" , "log(prothrombin)" , "histologic", "edema", "log(serChol)")
+dependent <- "Surv(years, status2)"
+pbcsurv %>% finalfit(dependent, explanatory) -> t6
+t6[,3:4] <- NULL
+# t6 <- t6[-16,]
+t6$` `[t6$` `== "Mean (SD)"] <- ""
+colnames(t6)[3] <- "`HR (95% CI, p-value)`"
+knitr::kable(t6, row.names=FALSE, align=c("l", "r", "r", "r"))
+
+#surv.fit.log %>% tbl_regression()
+#summary(surv.fit)
+#summary(surv.fit.log)
+
+#Fitting best Model
+#surv.fit2 <- coxph(data = pbc2.id, Surv(years, status2) ~ age + log(prothrombin) +
+#                      histologic + log(SGOT) + log(albumin) + edema + log(serChol), x = T)
+#summary(surv.fit2)
+# plot(surv.fit2$residuals)
+# qqnorm(surv.fit2$residuals)
+
+
+#cox.zph(surv.fit2)
+
+#ggcoxdiagnostics(surv.fit2, type = "deviance",
+#                 linear.predictions = FALSE, ggtheme = theme_bw())
+
+```
+
+The cox regression model shown in table 2 assesses that the risk of dying is equal for both drug groups but female patients are 0.59 times as likely to die than male patients, at any given time. An increase in log prothrombin had the highest hazard ratio, however, the very large confidence interval suggests uncertainty.
+
+# Random Mixed-Effects Model
+
+A random mixed-effects model is a model used to explain a dependent variable from longitudinal data incorporating both fixed and random effects. Prior research suggests that Serum Bilirubin may be associated with death in PBC patients(). With this in mind the outcome variable of interest for the longitudinal process will be Serum Bilirubin.
+
+**Figure 2. Distribution of Serum Bilirubin and log Serum Bilirubin**
+
+```{r Exploratory linear mixed effects model, echo=FALSE, message=FALSE, warning=FALSE}
+a <- gghistogram(data = pbc2,
+                 x = "serBilir",
+                 palette = "jco", fill = "#0073C2FF", color = "#0073C2FF",
+                 bins = 20) 
+pbc2$log_serBilir <- log(pbc2$serBilir)
+b <- gghistogram(data = pbc2,
+                 x = "log_serBilir",
+                 palette = "jco", fill = "#003C67FF", col = "#003C67FF",
+                 bins = 20)
+gridExtra::grid.arrange(a,b)
+```
+
+The highly positively skewed distribution shown in **figure 2** for Serum Bilirubin warranted for normalization. Moving on the log serum bilirubin will be the primary outcome of interest.
+
+\
+\
+\
+
+**Table 3. Linear Mixed-Effects model results of log Serum Bilirubin of PBC patients**
+```{r eval=FALSE, include=FALSE}
+library(lattice) 
+set.seed(123)
+x <- sample(pbc2.id[pbc2.id$sex == "male",][,1], 10)
+y <- sample(pbc2.id[pbc2.id$sex == "female",][,1], 10)
+z <- c(x,y)
+pbc2sub <- pbc2 %>% filter(id %in% z )
+#xyplot(log(serBilir) ~ year | id, data=pbc2sub, as.table=T)
+ggthemr("fresh")
+ggplot(data = pbc2sub, aes(x = year, y = log(serBilir))) +
+  geom_point() +
+  facet_wrap(~id) +
+  theme(
+   strip.background = element_rect(
+     color="black", fill="white", size=0.5, linetype="solid"
+     )
+   )
+
+
+ggplot(data = pbc2sub, aes(x = id, y = log(serBilir))) + geom_boxplot(aes(fill = sex))
+# ggboxplot(data = pbc2sub,
+#           x = "id", y = "log_serBilir",
+#           fill = "sex", color = "sex",
+#           palette = "jco", add = "median")
+
+longfit <- lme(data = pbc2, log(serBilir) ~ year + sex, random = ~ year|id)
+a <- summary(longfit)
+knitr::kable(data.frame(a$tTable))
+# gt(data.frame(a$tTable) %>% mutate(Name = rownames(data.frame(a$tTable)), Value = round(Value, 2), Std.Error = round(Std.Error, 2), t.value = round(t.value, 2), p.value = round(p.value, 2)) %>% dplyr::select(Name, Value, Std.Error, DF, t.value, p.value))
+#longfit2 <- glmer(data = pbc2,log(serBilir) ~ year + sex + (year|id)) 
+#longfit2 %>% tbl_regression(exp = TRUE)
+```
+
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=TRUE, results='asis'}
+pbc2$histologic <- as.factor(pbc2$histologic)
+long.fit4 <- nlme::lme(data = na.omit(pbc2), log(serBilir) ~ year + sex + ascites +
+                   hepatomegaly + spiders + edema + log(serChol) + albumin +
+                   alkaline + log(SGOT) + log(prothrombin) + histologic + log(platelets),
+                 random = ~ year|id)
+long.fit3 <- lme4::lmer(data = na.omit(pbc2),log(serBilir) ~ year + sex + ascites +
+                   hepatomegaly + spiders + edema + log(serChol) + albumin +
+                   alkaline + log(SGOT) + log(prothrombin) + histologic + log(platelets)+ (year|id)  )
+#long.fit3 %>% tbl_regression()
+a <- data.frame(summary(long.fit4)[20]$tTable)
+b <- a %>% mutate(Value = round(Value, 3),
+                  Std.Error = round(Std.Error, 3),
+                  t.value = round(t.value, 2),
+                  p.value = round(p.value, 4))
+c <- cbind(rownames(a), b)
+colnames(c)[1] <- "Parameter"
+c$d <- if_else(c$p.value <0.05, 1, 0)
+c$p.value <- as.character(c$p.value)
+c$p.value[c$p.value == "0"] <- "0.0000"
+for(i in 1:nrow(c)){
+if(c$d[i] == 1){
+  c$p.value[i] <- paste0("**",as.character(c$p.value[i]),"**")
+}else if(c$d[i] == 0){
+  c$p.value[i] <- c$p.value[i]
+}}
+c$d <- NULL
+knitr::kable(c)
+```
+
+Table 3 provides information for the coefficient estimates, standard errors and p-values for the random mixed effects model chosen with the lowest AIC value. Like the cox regression performed earlier, the log of prothrombin has the highest significant influence on the log serum bilirubin of all the covariates in this model. However, it is important to note that the standard error is also relatively high with 0.17. The p-value of the year variable being (p < 0.01) indicates that there is a significant change in log serum bilirubin as time passes. In Table 3 the sex variable having a p-value of (p = 0.01) assesses that female PBC patients on average have a significantly less increase in log serum bilirubin levels over the years than male PBC patients. Similarly other variables such as log of platelets and log of serum Cholesterol show a significant negative relationship with log serum bilirubin. 
+
+
+
+# Joint Model
+
+**Table 4. Event output from Joint Survival and Longitudinal Model using Bayesian Method **
+```{r Joint Model, warning=FALSE, include=FALSE}
+pbc2$histologic <- as.factor(pbc2$histologic)
+long_fit <- lme(data = na.omit(pbc2), log(serBilir) ~  year + sex + ascites +
+                   hepatomegaly + spiders + edema + log(serChol) + albumin +
+                   alkaline + log(SGOT) + log(prothrombin) + histologic + log(platelets),
+                 random = ~ year|id)
+#summary(long_fit)
+
+#pbc_3.id <- complete(imp_event)
+surv_fit <- coxph(data = pbcsurv, Surv(years, status2) ~ drug + sex + age + log(prothrombin) +
+                      histologic + log(SGOT) + log(albumin) + edema + log(serChol), x = T)
+#summary(surv_fit)
+
+joint_Fit <- JMbayes::jointModelBayes(long_fit, surv_fit, timeVar = "year")
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+kable(data.frame(summary(joint_Fit)[2]$'CoefTable-Event'))
+#summary(joint_Fit)
+```
+
+When we account for the longitudinal effects, we can see that some predictors that were once significant in predicting survival are now insignificant, e.g. histologic stage and SGOT. The results suggest that serum bilirubin is strongly related with the risk for the composite event, with a doubling of serum bilirubin levels, resulting in a 4.2-fold increase of the risk of death. This association was highly significant suggesting that there is stronger evidence for there to have been nonrandom dropout. (Drizopolous) When we account for the longitudinal process in the joint model, the event process assesses that D-penicil results in a 1.48-fold increase of the risk of death, but this treatment variable is still insignificant.
+
+# Conclusion
+
+Primary biliary cholangitis (PBC) is an autoimmune disease that has a very high association with an individual's log serum bilirubin levels. The traditional method in assessing survival probabilities of diseases such as PBC is cox regression. However, one of the limitations of this method is that this model can not account for endogenous time-varying variables. A joint model of both survival and longitudinal processes helps to account for these endogenous variables and give a more accurate estimation of the true association size of markers.
+
+While sex was  significant (alpha = 10%) in the cox model, the results from the joint model suggests that when we account for the time-varying variables sex no longer has a signficant difference in risk for death. The only variables that remain signficant when accounting for the longitudinal process are log serum cholesterol, log albumin, age and when the patient has edema present despite diuretic therapy. The results from the joint model saw a signficant drop in the p-value of the drug D-penicil. While this variable was still insignificant, this significant drop when accounting for the longitudinal process sheds new potential for further research. 
+
+When considering the joint model for prediction purposes, it was not as effective in predicting log serum bilirubin levels of held out final observation records compared to the random mixed-effects model alone. This suggests that there may be some limitations that come with this joint model. However, this limitation in predictive ability comes with a tradeoff with more accurate interpretability of the survival risk accounting for endogenous time-varying covariates.
+
+# References
+
+Pandit S, Samant H. Primary Biliary Cholangitis (Primary Biliary Cirrhosis) [Updated 2019 Feb 28]. In: StatPearls [Internet]. Treasure Island (FL): StatPearls Publishing; 2019 Jan-. Available from: https://www.ncbi.nlm.nih.gov/books/NBK459209/
+
+Purohit T, Cappell MS. Primary biliary cirrhosis: Pathophysiology, clinical presentation and therapy. World J Hepatol. 2015;7(7):926–941. doi:10.4254/wjh.v7.i7.926
+
+Rizopoulos, D. (2012). Joint models for longitudinal and time-to-event data: with applications in R. Boca Raton, FL: Chapman & Hall/CRC.
